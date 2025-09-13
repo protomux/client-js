@@ -1,0 +1,28 @@
+{
+  "name": "@protomux/client",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/protomux/client-js.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@bufbuild/protobuf": "^1.10.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "bugs": {
+    "url": "https://github.com/protomux/client-js/issues"
+  },
+  "homepage": "https://github.com/protomux/client-js#readme"
+}
