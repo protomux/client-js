@@ -1,6 +1,13 @@
 // Protomux JS Client Library
 // Public API: ProtomuxClient, encodeEnvelope, decodeEnvelope
 
+// Minimal ambient Node globals (optional) to avoid requiring @types/node for library consumers
+// when bundling in environments where process/require exist. They are declared loose to not
+// interfere with real typings if present.
+// Minimal loose declarations (avoid 'any'); using unknown where unavoidable.
+declare const process: { release?: { name?: string } } | undefined;
+declare function require(name: string): unknown;
+
 const VERSION = 1;
 
 function encodeVarint(value: number): Uint8Array {
@@ -85,15 +92,19 @@ export function decodeEnvelope(buf: ArrayBuffer): Envelope {
   };
 }
 
-export type Pending = {
+export interface Pending {
   resolve: (v: Uint8Array) => void;
-  reject: (e: any) => void;
-};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  reject: (e: unknown) => void;
+}
 
 export interface ProtomuxClientOptions {
   timeoutMs?: number;
   protocol?: string;
-  WebSocketImpl?: any;
+  WebSocketImpl?: typeof WebSocket;
+  headers?: Record<string, string>; // optional HTTP headers for initial WebSocket upgrade (Node environments)
+  openTimeoutMs?: number; // time to wait for websocket open before rejecting
+  onOpen?: () => void; // optional hook when connection opens
 }
 
 export class ProtomuxClient {
@@ -101,18 +112,26 @@ export class ProtomuxClient {
   private pending = new Map<number, Pending>();
   private openPromise: Promise<void>;
   private timeoutMs: number;
+  private pushHandlers: ((env: Envelope) => void)[] = [];
+  private typeHandlers: Map<
+    string,
+    Set<(payload: Uint8Array, env: Envelope) => void>
+  > = new Map();
 
   constructor(private url: string, opts: ProtomuxClientOptions = {}) {
     this.timeoutMs = opts.timeoutMs ?? 5000;
     const proto = opts.protocol ?? "protomux.v1";
-    const WSImpl: any = resolveWS(opts);
+    const WSImpl = resolveWS(opts) as typeof WebSocket;
+    // If headers provided and ws implementation supports passing options (like 'ws' in Node), forward them.
+    // Simplified: always call with (url, proto); Node 'ws' accepts second protocols arg.
     this.ws = new WSImpl(url, proto);
-    (this.ws as any).binaryType = "arraybuffer";
-    this.ws.onmessage = (ev: any) => this.onMessage(ev.data as ArrayBuffer);
+    (this.ws as WebSocket).binaryType = "arraybuffer";
+    this.ws.onmessage = (ev: MessageEvent) =>
+      this.onMessage(ev.data as ArrayBuffer);
     this.ws.onopen = () => {
       /* optional hook */
     };
-    this.ws.onerror = (e: any) => {
+    this.ws.onerror = () => {
       /* swallow; surfaced via pending timeouts */
     };
     this.ws.onclose = () => {
@@ -122,8 +141,35 @@ export class ProtomuxClient {
       }
       this.pending.clear();
     };
-    this.openPromise = new Promise((res) => {
-      this.ws.addEventListener("open", () => res(), { once: true });
+    const openTimeout = opts.openTimeoutMs ?? 3000;
+    this.openPromise = new Promise((res, rej) => {
+      const to = setTimeout(() => {
+        rej(new Error("websocket open timeout"));
+      }, openTimeout);
+      this.ws.addEventListener(
+        "open",
+        () => {
+          clearTimeout(to);
+          if (opts.onOpen) {
+            try {
+              opts.onOpen();
+            } catch {}
+          }
+          res();
+        },
+        { once: true }
+      );
+      this.ws.addEventListener(
+        "error",
+        (ev: Event & { error?: unknown }) => {
+          clearTimeout(to);
+          rej(
+            (ev as unknown as { error?: unknown })?.error ||
+              new Error("websocket error")
+          );
+        },
+        { once: true }
+      );
     });
   }
 
@@ -137,7 +183,15 @@ export class ProtomuxClient {
           p.resolve(env.payload);
         }
       } else {
-        // push frame: ignore for now
+        // push frame
+        for (const fn of this.pushHandlers) {
+          try {
+            fn(env);
+          } catch {
+            /* isolate */
+          }
+        }
+        this.emitType(env);
       }
     } catch (e) {
       // ignore
@@ -167,11 +221,66 @@ export class ProtomuxClient {
     });
   }
 
-  get readyState() {
-    return (this.ws as any).readyState;
+  get readyState(): number {
+    return this.ws.readyState;
   }
   close() {
     this.ws.close();
+  }
+
+  onPush(fn: (env: Envelope) => void) {
+    this.pushHandlers.push(fn);
+  }
+
+  on(typeName: string, fn: (payload: Uint8Array, env: Envelope) => void) {
+    let set = this.typeHandlers.get(typeName);
+    if (!set) {
+      set = new Set();
+      this.typeHandlers.set(typeName, set);
+    }
+    set.add(fn);
+    return () => {
+      set!.delete(fn);
+      if (set!.size === 0) this.typeHandlers.delete(typeName);
+    };
+  }
+
+  private emitType(env: Envelope) {
+    const set = this.typeHandlers.get(env.typeName);
+    if (set) {
+      for (const fn of set) {
+        try {
+          fn(env.payload, env);
+        } catch {}
+      }
+    }
+  }
+
+  async rawSend(typeName: string, payload: Uint8Array): Promise<void> {
+    await this.openPromise;
+    const frame = encodeEnvelope(allocCID(), typeName, payload);
+    this.ws.send(frame);
+  }
+
+  async send(typeName: string, payload: Uint8Array): Promise<void> {
+    return this.rawSend(typeName, payload);
+  }
+
+  async requestProto<TRes>(
+    inType: string,
+    reqBytes: Uint8Array,
+    decode: (bytes: Uint8Array) => TRes
+  ): Promise<TRes> {
+    const bytes = await this.request(inType, reqBytes);
+    return decode(bytes);
+  }
+
+  async subscribe(topic: string): Promise<() => void> {
+    const enc = new TextEncoder().encode(topic);
+    await this.rawSend("protomux.subscribe", enc);
+    return async () => {
+      await this.rawSend("protomux.unsubscribe", enc);
+    };
   }
 }
 
@@ -181,23 +290,56 @@ function allocCID() {
   return nextCID++;
 }
 
-function resolveWS(opts: ProtomuxClientOptions): any {
+function resolveWS(opts: ProtomuxClientOptions): unknown {
   if (opts.WebSocketImpl) return opts.WebSocketImpl;
-  if ((globalThis as any).WebSocket) return (globalThis as any).WebSocket;
+  const isNode =
+    typeof process !== "undefined" &&
+    !!process?.release?.name &&
+    process.release!.name === "node";
+  // If headers requested in Node, prefer 'ws' explicitly (since browser WebSocket can't take headers).
+  if (isNode && opts.headers) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require("ws") as unknown;
+      if (mod && typeof mod === "object" && "default" in (mod as any)) {
+        return (mod as any).default as typeof WebSocket;
+      }
+      return mod as typeof WebSocket;
+    } catch {
+      /* fallback */
+    }
+  }
+  if ((globalThis as unknown as { WebSocket?: typeof WebSocket }).WebSocket)
+    return (globalThis as unknown as { WebSocket?: typeof WebSocket })
+      .WebSocket;
+  if (isNode) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require("ws") as unknown;
+      if (mod && typeof mod === "object" && "default" in (mod as any)) {
+        return (mod as any).default as typeof WebSocket;
+      }
+      return mod as typeof WebSocket;
+    } catch {}
+  }
   throw new Error(
-    "No WebSocket implementation available. Pass WebSocketImpl option in Node."
+    "No WebSocket implementation available (tried global and 'ws'). Install 'ws' or supply WebSocketImpl."
   );
 }
 
 // Generic protobuf message helpers (ts-proto style fns). Expect fns to have encode/decode(BinaryWriter/BinaryReader)
 // Generic encode/decode helpers for ts-proto style message fns.
 // Assumes fns.encode supplies a default writer when writer param omitted.
-export function encodeMessage<T>(msg: T, fns: { encode(message: T, writer?: any): any }): Uint8Array {
-  const w = fns.encode(msg as any); // rely on default BinaryWriter inside generated code
+export interface TsProtoEncoder<T> {
+  encode(message: T, writer?: unknown): { finish(): Uint8Array };
+}
+export interface TsProtoDecoder<T> {
+  decode(input: Uint8Array, length?: number): T;
+}
+export function encodeMessage<T>(msg: T, fns: TsProtoEncoder<T>): Uint8Array {
+  const w = fns.encode(msg);
   return w.finish();
 }
-
-export function decodeMessage<T>(bytes: Uint8Array, fns: { decode(input: any, length?: number): T }): T {
-  // ts-proto decode accepts Uint8Array directly
+export function decodeMessage<T>(bytes: Uint8Array, fns: TsProtoDecoder<T>): T {
   return fns.decode(bytes);
 }
