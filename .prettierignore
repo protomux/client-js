@@ -1,0 +1,17 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+*.tsbuildinfo
+
+# Generated files
+src/gen
+*.generated.ts
+
+# Coverage
+coverage
+.nyc_output
+
+# Logs
+*.log

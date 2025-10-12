@@ -10,6 +10,10 @@ yarn-error.log*
 # TS build info
 *.tsbuildinfo
 
+# Coverage
+coverage/
+.nyc_output/
+
 # IDE
 .idea/
 .vscode/
