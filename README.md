@@ -272,5 +272,4 @@ npm run test:coverage
 ```
 
 ## License
-MIT (adjust if needed).
-
+MIT

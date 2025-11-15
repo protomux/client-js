@@ -2,7 +2,7 @@
   "name": "@protomux/client",
   "type": "module",
   "version": "1.0.0",
-  "description": "",
+  "description": "JS/TS client library for Protomux",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -21,7 +21,7 @@
     "url": "https://github.com/protomux/client-js.git"
   },
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@bufbuild/protobuf": "^1.10.0"
   },
