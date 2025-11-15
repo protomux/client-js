@@ -1,6 +1,6 @@
 # @protomux/client (JS/TS)
 
-WebSocket client for the [Protomux](../protomux/README.md) binary envelope protocol.
+WebSocket client for the [Protomux](https://github.com/protomux/protomux) binary envelope protocol.
 
 ## Features
 - Tiny (~no deps) core: encode / decode envelope, correlating unary requests
@@ -243,12 +243,12 @@ Must match fully-qualified proto message names the server registered (`proto.Mes
 
 The repository includes several complete examples demonstrating different use cases:
 
-- **[Basic Service](../examples/basic/README.md)** - Simple Book CRUD with request/response RPC
-- **[Chat Application](../examples/chat/README.md)** - Real-time chat with pub/sub and push events
-- **[JWT Authentication](../examples/jwt/README.md)** - Secure WebSocket with JWT tokens
-- **[Thundering Herd Protection](../examples/thunderingherd/README.md)** - Connection admission control
+- **[Basic Service](https://github.com/protomux/examples/tree/main/basic)** - Simple Book CRUD with request/response RPC
+- **[Chat Application](https://github.com/protomux/examples/tree/main/chat)** - Real-time chat with pub/sub and push events
+- **[JWT Authentication](https://github.com/protomux/examples/tree/main/jwt)** - Secure WebSocket with JWT tokens
+- **[Thundering Herd Protection](https://github.com/protomux/examples/tree/main/thunderingherd)** - Connection admission control
 
-See the [examples README](../examples/README.md) for complete documentation and setup instructions.
+See the [examples README](https://github.com/protomux/examples) for complete documentation and setup instructions.
 
 ## Development
 
